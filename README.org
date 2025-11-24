@@ -1,0 +1,7 @@
+* Toolbox
+
+This repository contains CLI utils I rebuild using ~Zig~, in order to
+learn the language and low-level programming in general.
+
+I'm streaming my activies on [[https://www.youtube.com/playlist?list=PLvWC0OdoEeThTFgKUhf6eWIQDDc1ZVCcA][my YouTube channel]]. And for each session,
+I try to share my learning notes in[[https://sourcery.zone/tags/wc/][ my blog]].
