@@ -3,6 +3,8 @@ const clap = @import("clap");
 
 const VERSION = "v0.0.1";
 
+const Encoding = enum { utf8, ascii };
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
@@ -21,6 +23,8 @@ pub fn main() !void {
         \\-w, --words   print the word counts
         \\--total <WHEN>   when to print a line with total counts; WHEN can be: auto, always, only, never
         \\--version   output version information and exit
+        \\--encoding <ENCODING>   set the file's encoding, used for character count
+        \\--keep-bom   if set and the BOM character exists, also count it as a character
         \\<FILE>
         // TODO accept directory to generate report for all of the
         // files inside it, and maybe also traverse it recursively.
@@ -31,6 +35,7 @@ pub fn main() !void {
         .STR = clap.parsers.string,
         .WHEN = clap.parsers.enumeration(when),
         .FILE = clap.parsers.string,
+        .ENCODING = clap.parsers.enumeration(Encoding),
     };
 
     var diag = clap.Diagnostic{};
@@ -42,6 +47,9 @@ pub fn main() !void {
         return err;
     };
     defer res.deinit();
+
+    const encoding = res.args.encoding orelse Encoding.utf8;
+    const keep_bom = if (res.args.@"keep-bom" == 0) false else true;
 
     if (res.args.help != 0)
         return clap.helpToFile(.stderr(), clap.Help, &params, .{});
@@ -75,7 +83,7 @@ pub fn main() !void {
 
     // -m: print character count
     if (res.args.chars != 0) {
-        const char_count = try getCharCount(file);
+        const char_count = try getCharCount(file, encoding, keep_bom);
         std.debug.print("chars: {d}\n", .{char_count});
     }
 
@@ -92,18 +100,32 @@ fn getBytesCount(file: std.fs.File) usize {
     };
 }
 
-fn getCharCount(file: std.fs.File) !usize {
+fn getCharCount(file: std.fs.File, encoding: Encoding, keep_bom: bool) !usize {
+    std.debug.print("{}-{}\n", .{ encoding, keep_bom });
     var buf: [4096]u8 = undefined;
     var char_count: usize = 0;
+    var first_chunk = true;
 
     while (true) {
+        // TODO subject to error, for boundary split on chunk
         const size = try file.read(&buf);
         if (size == 0) {
             break;
         }
 
+        var start = 0;
+        if (first_chunk and !keep_bom and encoding == .utf8) {
+            if (buf.len >= 3 and buf[0] == 0xEF and buf[1] == 0xBB and buf[2] == 0xBF) {
+                start = 3;
+            }
+
+            first_chunk = false;
+        } else if (first_chunk) {
+            first_chunk = false;
+        }
+
         // TODO feature: add glyphs count too!
-        char_count += try std.unicode.utf8CountCodepoints(buf[0..size]);
+        char_count += try std.unicode.utf8CountCodepoints(buf[start..size]);
     }
 
     return char_count;
