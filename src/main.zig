@@ -88,9 +88,60 @@ pub fn main() !void {
         std.debug.print("chars: {d}\n", .{char_count});
     }
 
+    // -m: print line count
+    if (res.args.lines != 0) {
+        const line_count = try getNewLineCount(file);
+        std.debug.print("new lines: {d}\n", .{line_count});
+    }
+
     // TODO optimize by preferring byte count, when the maximum number
     // of bytes per character is equal to one:
     // https://github.com/coreutils/coreutils/blob/master/src/wc.c#L335
+}
+
+fn getNewLineCount(file: std.fs.File) !usize {
+    try file.seekTo(0);
+    var buf: [4096]u8 = undefined;
+    var count: usize = 0;
+
+    while (true) {
+        const size = try file.read(&buf);
+
+        if (size == 0) {
+            break;
+        }
+
+        count += std.mem.count(u8, &buf, "\n");
+    }
+
+    return count;
+}
+
+// FIXME DRY
+fn countNewLinesFromBytes(bytes: []const u8) !usize {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "f", .data = bytes });
+    var f = try tmp.dir.openFile("f", .{ .mode = .read_only });
+    defer f.close();
+
+    return getNewLineCount(f);
+}
+
+test "no new line" {
+    const actual = try countNewLinesFromBytes("no new line here");
+    try testing.expectEqual(0, actual);
+}
+
+test "with many new line" {
+    const actual = try countNewLinesFromBytes("lots\nof\nnew\nlines\nhere");
+    try testing.expectEqual(4, actual);
+}
+
+test "with many new line with carriage returns" {
+    const actual = try countNewLinesFromBytes("lots\r\nof\r\nnew\r\nlines\r\nhere");
+    try testing.expectEqual(4, actual);
 }
 
 fn getBytesCount(file: std.fs.File) usize {
@@ -102,6 +153,7 @@ fn getBytesCount(file: std.fs.File) usize {
 }
 
 fn getCharCount(file: std.fs.File, encoding: Encoding, keep_bom: bool) !usize {
+    try file.seekTo(0);
     var buf: [4096]u8 = undefined;
     var char_count: usize = 0;
     var first_chunk = true;
@@ -160,7 +212,7 @@ fn getCharCount(file: std.fs.File, encoding: Encoding, keep_bom: bool) !usize {
     return char_count;
 }
 
-fn countFromBytes(bytes: []const u8, enc: Encoding, keep_bom: bool) !usize {
+fn countCharsFromBytes(bytes: []const u8, enc: Encoding, keep_bom: bool) !usize {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -172,35 +224,35 @@ fn countFromBytes(bytes: []const u8, enc: Encoding, keep_bom: bool) !usize {
 }
 
 test "ASCII: simple count" {
-    const n = try countFromBytes("Hello", .utf8, false);
+    const n = try countCharsFromBytes("Hello", .utf8, false);
     try testing.expectEqual(@as(usize, 5), n);
 }
 
 test "UTF-8: basic multibyte (emoji)" {
     // "a😀b" -> 3 code points; bytes: 61 F0 9F 98 80 62
-    const n = try countFromBytes("a" ++ "\xF0\x9F\x98\x80" ++ "b", .utf8, false);
+    const n = try countCharsFromBytes("a" ++ "\xF0\x9F\x98\x80" ++ "b", .utf8, false);
     try testing.expectEqual(@as(usize, 3), n);
 }
 
 test "UTF-8 BOM: skipped when keep_bom=false" {
-    const n = try countFromBytes("\xEF\xBB\xBF" ++ "abc", .utf8, false);
+    const n = try countCharsFromBytes("\xEF\xBB\xBF" ++ "abc", .utf8, false);
     try testing.expectEqual(@as(usize, 3), n);
 }
 
 test "UTF-8 BOM: counted when keep_bom=true" {
-    const n = try countFromBytes("\xEF\xBB\xBF" ++ "abc", .utf8, true);
+    const n = try countCharsFromBytes("\xEF\xBB\xBF" ++ "abc", .utf8, true);
     try testing.expectEqual(@as(usize, 4), n);
 }
 
 test "EOF with incomplete trailing sequence is ignored (current behavior)" {
     // Single leading byte 0xC2 (expects 2 bytes); current impl drops it at EOF
     // FIXME
-    const n1 = try countFromBytes("\xC2", .utf8, false);
+    const n1 = try countCharsFromBytes("\xC2", .utf8, false);
     try testing.expectEqual(@as(usize, 0), n1);
 
     // 'A' followed by dangling 0xC2 -> counts 'A' only
     // TODO This error for user is ugly, fix it
-    const n2 = countFromBytes("A" ++ "\xC2", .utf8, false);
+    const n2 = countCharsFromBytes("A" ++ "\xC2", .utf8, false);
     try testing.expectError(error.TruncatedInput, n2);
 }
 
@@ -214,6 +266,6 @@ test "Split multi-byte at 4096 boundary triggers InvalidUtf8 (current bug acknow
     // This currently passes the whole chunk to utf8CountCodepoints and errors.
     try testing.expectError(
         error.TruncatedInput,
-        countFromBytes(&buf, .utf8, false),
+        countCharsFromBytes(&buf, .utf8, false),
     );
 }
